@@ -1,0 +1,96 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:13
+    environment:
+      POSTGRES_DB: etl_db
+      POSTGRES_USER: etl_user
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  airbyte-webapp:
+    image: airbyte/webapp:0.35.10-alpha
+    environment:
+      - AIRBYTE_ROLE=webapp
+      - INTERNAL_API_HOST=airbyte-server
+    ports:
+      - "8100:80"
+
+  airbyte-server:
+    image: airbyte/server:0.35.10-alpha
+    environment:
+      - AIRBYTE_ROLE=server
+      - WORKSPACE_ROOT=/tmp/airbyte_workspace
+      - DATABASE_USER=etl_user
+      - DATABASE_PASSWORD=password
+      - DATABASE_HOST=postgres
+      - DATABASE_PORT=5432
+      - CONFIG_DATABASE_USER=etl_user
+      - CONFIG_DATABASE_PASSWORD=password
+      - CONFIG_DATABASE_HOST=postgres
+      - CONFIG_DATABASE_PORT=5432
+    ports:
+      - "8101:8001"
+    volumes:
+      - airbyte_workspace:/tmp/airbyte_workspace
+    depends_on:
+      - postgres
+
+  airbyte-scheduler:
+    image: airbyte/scheduler:0.35.10-alpha
+    environment:
+      - AIRBYTE_ROLE=scheduler
+      - WORKSPACE_ROOT=/tmp/airbyte_workspace
+      - INTERNAL_API_HOST=airbyte-server
+      - DATABASE_USER=etl_user
+      - DATABASE_PASSWORD=password
+      - DATABASE_HOST=postgres
+      - DATABASE_PORT=5432
+    ports:
+      - "8102:8002"
+    volumes:
+      - airbyte_workspace:/tmp/airbyte_workspace
+    depends_on:
+      - airbyte-server
+
+  airflow:
+    build:
+      context: .
+      dockerfile: airflow/Dockerfile.airflow
+    environment:
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'false'
+      AIRFLOW__CORE__SQL_ALCHEMY_CONN: postgresql+psycopg2://etl_user:password@postgres:5432/etl_db
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./dags:/usr/local/airflow/dags
+      - ./transformation:/usr/local/airflow/transformation
+      - ./data:/usr/local/airflow/data
+      - ./requirements.txt:/requirements.txt
+    command: >
+      bash -c "
+      pip install --no-cache-dir -r /requirements.txt &&
+      airflow db init &&
+      airflow webserver & airflow scheduler"
+    depends_on:
+      - postgres
+
+  fastapi:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8103:8000"
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      - postgres
+
+volumes:
+  postgres_data:
+  airbyte_workspace:
